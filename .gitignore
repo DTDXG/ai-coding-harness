@@ -1,0 +1,7 @@
+# check.py 的命中日志,本地数据,不进版本库
+.check-hits.log
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/

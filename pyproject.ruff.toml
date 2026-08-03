@@ -1,0 +1,64 @@
+# 合并进你项目的 pyproject.toml。不要整份复制过去覆盖已有配置。
+#
+# 设计依据见 ai-coding-rules-design.md 第七节:
+#   - 分批开,不要一次全开(存量仓库会炸出几千条历史违规)
+#   - required-version 必须固定:规则行为会随 ruff 版本漂移
+#   - C901 / PLR0912 只是「审查触发器」,不是「修了根因」的证据
+
+[tool.ruff]
+required-version = "0.12.0"   # ← 改成你实际 pin 的版本,别留区间
+line-length = 120
+target-version = "py311"      # ← 改成你的实际版本
+extend-exclude = ["migrations", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# 第一批:低争议,先开。跑顺了再解注释第二批。
+select = [
+    "E",     # pycodestyle 错误
+    "F",     # pyflakes(含 F401 未使用 import、F403 星号导入)
+    "W",     # pycodestyle 警告
+    "I",     # isort 导入分组排序
+    "B",     # bugbear(含 B006 可变默认参数)
+    "UP",    # pyupgrade
+    "T20",   # 禁止 print / pprint
+    "ERA",   # 注释掉的死代码 —— 直接对应「只增不删」
+    "ARG",   # 未使用的参数 —— 改动残留痕迹
+    "RUF",
+]
+
+# 第二批(第一批零报警后再逐个加,一次加一个):
+#   "N"      命名规范 snake_case / PascalCase
+#   "S"      bandit 安全(含 S105/S106 硬编码密钥、S110 try-except-pass)
+#   "ANN"    类型注解
+#   "D"      docstring(配合下面的 pydocstyle convention)
+#   "C90"    mccabe 圈复杂度
+#   "PLR"    pylint refactor(含 PLR0912 分支数、PLR0915 语句数)
+#   "SIM"    简化建议 —— 注意必须带上下面的 ignore
+
+ignore = [
+    # SIM116 建议把连续 if 改写成字典。而字典恰恰是特例最难被发现的藏身处 ——
+    # 这条规则在主动帮模型把问题藏起来。即使还没开 SIM 也先写在这里,防止第二批时忘记。
+    "SIM116",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里需要硬编码具体输入、magic number、断言用的假数据
+"tests/**"      = ["S101", "PLR2004", "ANN", "D", "ARG", "S105", "S106"]
+"conftest.py"   = ["ANN", "D"]
+"scripts/**"    = ["T20", "D"]   # 脚本本来就要 print
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12    # 只是审查触发器。别把「没超阈值」当成「没打特例补丁」
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ── 存量仓库接入顺序 ────────────────────────────────────────────────
+# 1. ruff check --fix          先自动修一轮
+# 2. ruff check --statistics   看剩余违规分布
+# 3. 短期修不完的规则先进 ignore(写上「为什么暂时不修」),或用 baseline 圈住只对新代码生效
+# 4. 每清掉一类就从 ignore 里删一条

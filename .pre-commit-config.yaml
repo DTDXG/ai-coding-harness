@@ -1,0 +1,22 @@
+# 兜底层。不是绝对保险:--no-verify 可以跳过,而且只拦得住检查器认识的模式。
+# 它证明不了模型没改坏测试、没伪造验证结论、没把特例移进 prompt。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.0 # 与 pyproject.toml 的 required-version 保持一致
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: ai-antipattern-check
+        name: AI 反模式检查(仅警告)
+        entry: python scripts/check.py
+        language: system
+        types: [python]
+        pass_filenames: true
+        verbose: true # 让警告在 commit 时可见
+        # 注意:不加 --strict,所以它永远不会阻止提交。
+        # 想让它真的卡住提交(不推荐,误报会变成日常摩擦),把 entry 改成:
+        #   python scripts/check.py --strict
