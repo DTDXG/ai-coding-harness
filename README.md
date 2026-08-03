@@ -27,8 +27,10 @@ README 只说结论,「为什么是这几条、哪些方案被否掉了、为什
 | **F6** | **伪造验证结论** | 「已验证,功能正常」——一条命令没跑。或者测试挂了就改断言去迁就实现 |
 | **F7** | **凭记忆用第三方 API** | 按训练数据里的签名调用,和你 lock 的版本对不上 |
 | **F8** | **做你没要求的事** | 顺手重构、顺手加个「更完善的」错误处理、顺手改配置 |
+| **F9** | **陷在自己的上下文里出不来** | 从头做到尾的那一个 agent,做完时正处在最确信自己做对了的状态。让它自查,它会把新增分支解释成「真实的不同情况」;让它造验证变体,那些变体是照着它刚写的修复的形状造的 —— 自证 |
 
 F1 是核心,F3/F4 算它的下游。**F1 也是唯一一个静态检查基本抓不到的** —— 见第六节。
+F9 是**元失败模式**:它让其他八条的自查全部失效,所以它的解法不是再加一条规则,是换个 agent。
 
 ---
 
@@ -68,8 +70,10 @@ F1 是核心,F3/F4 算它的下游。**F1 也是唯一一个静态检查基本�
 | **F6** 伪造验证 | 没实际执行过命令不许说「已验证」;汇报必须带范围;改测试断言须有独立证据 | — | Stop hook 会拦一次,逼它处理未验证项 |
 | **F7** API 幻觉 | 用第三方 API 前先确认**已安装版本**的实际签名 | — | — |
 | **F8** 范围扩张 | 不实现我没要求的功能;做了没要求的事必须说 | — | diff review |
+| **F9** 陷在自己上下文 | **验证者不该是开发者本人**;只给审查者「原始需求 + git diff」 | — | 干净上下文的 subagent。Claude Code 用 Task,Codex 用 `collaboration.spawn_agent` |
 
 F5–F8 没有自动检查 —— **这是结构性的,不是没来得及做**。它们是关于「过程」的,静态分析看不到过程。
+F9 也没有,但原因不同:它有机制(换 agent),缺的是「有没有真的换」这件事本身不可验证。
 
 ---
 
@@ -251,10 +255,16 @@ if "ping" in text:   # check: ignore[keyword-match] 协议探活,不是猜用户
 
 4. **`dup-func` 只在本次检查的文件之间比对。** 跨全仓库要 `--all`,函数超过 600 个会跳过。
 
-5. **code-simplifier 是同一个 agent 在同一上下文里自查。**
+5. **code-simplifier 是同一个 agent 在同一上下文里自查(F9)。**
    它已经相信自己找到根因时,清单不会提供外部视角 —— 会自然地把新增分支解释成
    「真实的不同情况」。所以 skill 里把**经验验证(跑变体和反例)放在了清单前面**,
-   清单只是补充。真正的外部视角需要干净上下文的审查者,短任务里这一层是缺的。
+   清单只是补充。
+
+   **2026-08-03 补了一半**:AGENTS.md 加了「验证者不该是开发者本人」,高风险改动派干净
+   上下文的 subagent 来验。剩下的一半补不上 —— **同一个模型、同样的先验**。
+   干净上下文去掉的是路径依赖和沉没成本,去不掉模型共有的偏见。
+   而且「有没有真的派」这件事本身不可验证,只能靠模型自觉,所以这条规则的强度天然弱于
+   有 hook 兜着的那些。
 
 6. **pre-commit + CI 不是保险。** `--no-verify` 能跳过;而且它只拦得住检查器认识的模式,
    证明不了模型没改坏测试(F6)、没伪造验证结论。
@@ -279,8 +289,18 @@ if "ping" in text:   # check: ignore[keyword-match] 协议探活,不是猜用户
    模型多跑一轮来处理。靠 `stop_hook_active` 保证只拦一次,不会死循环。
    嫌烦就设 `CHECK_STOP_BLOCK=0`,或删掉 `.claude/settings.json` 里的 Stop 段。
 
-另外 **Codex CLI 的 hook 能力没核实过**。就算它没有,`check.py` 是纯 Python,
-在 Codex 那边靠 `AGENTS.md` 里那句「改完跑 `python scripts/check.py --diff`」加 pre-commit 兜底,架构不受影响。
+**Codex 的 hook 和 subagent 都已核实**(codex-cli 0.146.0,2026-08-03 实测):
+
+- **hooks —— stable 且默认启用**。事件名和 Claude Code 完全一致:`PreToolUse` / `PostToolUse` /
+  `Stop` / `SubagentStart` / `SubagentStop` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` /
+  `PreCompact` / `PostCompact` / `PermissionRequest`。契约也一致(`exit 2` + stderr 反馈、
+  `decision: block` + reason)。配置文件是 `hooks.json`,不是 `.claude/settings.json`。
+  **本仓库还没提供 Codex 侧的 `hooks.json`** —— 现在 Codex 那边靠 `AGENTS.md` 里那句
+  「改完跑 `python scripts/check.py --diff`」加 pre-commit 兜底。
+- **subagent —— `collaboration.spawn_agent`**,配套 `wait_agent` / `list_agents` /
+  `send_message` / `interrupt_agent`,需要 `features.multi_agent = true`。
+
+所以 F9 那条 AGENTS.md 规则两个平台都能真正执行,不是只对 Claude Code 有效。
 
 ---
 

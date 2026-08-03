@@ -149,8 +149,13 @@
 `pre-commit` 可被 `--no-verify` 跳过;CI 只拦得住**检查器认识的模式**。
 它无法证明模型没有改坏测试、没有伪造验证结论、没有把特例移进 prompt。
 
-> ⚠️ 待核实:Codex CLI 当前的 hook 能力(讨论时搜索工具不可用,未凭记忆断言)。
-> 但即使没有,退化后靠 pre-commit 兜底也不会漏,不影响架构。
+> ~~⚠️ 待核实:Codex CLI 当前的 hook 能力(讨论时搜索工具不可用,未凭记忆断言)。~~
+> ✅ **2026-08-03 已核实(codex-cli 0.146.0,查实际二进制 + 实跑)**:Codex **有 hooks,stable 且默认启用**。
+> 事件名与 Claude Code 完全一致(`PreToolUse` / `PostToolUse` / `Stop` / `SubagentStart` /
+> `SubagentStop` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `PreCompact` /
+> `PostCompact` / `PermissionRequest`),契约也一致(`exit 2` + stderr、`decision: block` + reason)。
+> 配置文件是 `hooks.json`。**本仓库尚未提供 Codex 侧 `hooks.json`,这是现在真实存在的缺口。**
+> 另外 Codex 也有 subagent:`collaboration.spawn_agent`(需 `features.multi_agent = true`)。
 
 ---
 
@@ -463,6 +468,14 @@ ignore = ["SIM116"]           # 理由见上表
 > 它会自然地把新增分支解释成"真实的不同情况"。
 > 真正的外部视角需要干净上下文的审查者(见第十一节),**短任务里这一层是缺的**。
 > 目前只能靠第六节的变体 + 反例验证来部分补偿。
+>
+> ✅ **2026-08-03 已补(F9)**:AGENTS.md 验证段加了「验证者不该是开发者本人」——
+> 越确信「就该这么修」越该派干净上下文的 subagent,**只给它「原始需求 + git diff」,
+> 不给推理和结论**,由它自己造变体和反例。两个平台都有原语,不是 Claude Code 独有。
+> 关键理由不是"多一双眼睛",而是:**开发者自己造的变体是照着自己刚写的修复的形状造的**,
+> 和第十三节「只在自己写的样本上测 = 循环论证」是同一个错误。
+> **仍然补不上的部分**:同一个模型、同样的先验 —— 干净上下文去掉的是路径依赖和沉没成本,
+> 去不掉模型共有的偏见。且「有没有真的派」不可验证,这条规则天然弱于有 hook 兜着的那些。
 
 ---
 
@@ -473,7 +486,7 @@ ignore = ["SIM116"]           # 理由见上表
 | KISS / YAGNI / DRY / SOLID 四条原则 | 不可判定。模型主观认为自己一直在遵守;写 God class 时不觉得违反 SRP。占 4 行预算,产出 0 行为改变。且 DRY 与"不提前抽象"两句互相抵消 |
 | "用户是智障人士,少用术语" | 有害。模型会照字面降低技术密度、解释基础概念。想表达的"别堆术语"应单独写 |
 | Python 风格规范写进 AGENTS.md | 归 ruff。写进去纯属浪费常驻预算 |
-| 短任务派 subagent 做检索 | 短任务上下文没有压力,压缩收益不存在;而延迟、总 token 更高、信息有损是实打实的。**subagent 的价值在长任务** |
+| 短任务派 subagent **做检索** | 短任务上下文没有压力,压缩收益不存在;而延迟、总 token 更高、信息有损是实打实的。**subagent 的价值在长任务** |
 | "尽量 / 建议 / 优先"类措辞 | 等于全局失效。用户现有 CLAUDE.md 的"注意不要硬编码"就是此类,已被证明无效 |
 | `update_plan` / `apply_patch` | Codex CLI 工具名,Claude Code 不存在。直接抄别人配置的典型坑 |
 | 大段 SQL / API 排查手册留在 CLAUDE.md | 挪去 `docs/`,正文留一行指路 |
@@ -484,6 +497,12 @@ ignore = ["SIM116"]           # 理由见上表
 | check.py 设"零误报拦截项" | 做不到。800 行文件里新增函数很可能正是在拆分 |
 | AGENTS.md 里写"不输出 .env / 密钥 / 鉴权头" | **已实测证伪**(2026-07-31,codex ×3,假密钥副本):最终答复 3/3 干净,全部用占位符 —— 这个行为模型已稳定 cover。而真实泄漏发生在 `rg -i <服务名> .` 顺带匹配到 `.env.local`,**markdown 规则管不了 ripgrep 打印什么**。风险真实但归属层错了:该由 `.rgignore` / PreToolUse hook 解决,不占常驻预算 |
 | AGENTS.md 里写"不复制用户完整 prompt / 回复" | 项目特定(有真实用户数据的产品才成立),不是通用工作约定。退回各项目自己的 CLAUDE.md 项目段 |
+
+> ⚠️ **2026-08-03 补充,防止误读上面那条**:被排除的是「派 subagent **做检索**」——
+> 那是拿 subagent 当上下文压缩手段,短任务没有压缩需求。
+> 「派 subagent **做验证**」是另一件事:要的是**独立视角**,和任务长短无关。
+> 后者已采纳,写进 AGENTS.md 验证段(F9),两个平台都有原语:
+> Claude Code 的 Task、Codex 的 `collaboration.spawn_agent`。
 
 **通用原则:不要抄别人的 CLAUDE.md。** 别人的规则对他有用是因为那是他踩出的坑。
 抄来的规则你不会去检查是否被执行 —— 而**写了不检查的规则,会让模型学到
@@ -518,7 +537,9 @@ ignore = ["SIM116"]           # 理由见上表
       靠 `stop_hook_active` 保证只拦一次);pre-commit 不加 `--strict`,不阻断提交
 - [x] `selftest/` —— check.py 自己的回归测试:全部规则触发 + 邻近反例零误报
       (当时 8 条 / 7 个反例,现为 6 条)
-- [ ] 核实 Codex CLI 当前 hook 能力(仍未核实;架构上不依赖它)
+- [x] 核实 Codex CLI 当前 hook 能力 —— **2026-08-03 已核实:有,stable,事件名和契约与
+      Claude Code 一致,配置文件 `hooks.json`**。Codex 同时有 subagent
+      (`collaboration.spawn_agent`)。**新缺口:本仓库还没提供 Codex 侧的 `hooks.json`。**
 
 **实现过程中被推翻/修正的**(细节写在 `ai-coding-rules/README.md`「已知的洞」):
 
