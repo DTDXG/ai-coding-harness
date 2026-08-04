@@ -1,0 +1,28 @@
+{
+  "description": "Run the repository's AI antipattern checks after edits and before stopping.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^apply_patch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/check.py\" --hook-post-tool",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/check.py\" --hook-stop",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

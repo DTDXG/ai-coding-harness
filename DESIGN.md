@@ -142,7 +142,7 @@
 第一层  规则本身   →  scripts/check.py(纯 Python,零平台依赖)
 第二层  自动触发   →  平台 hook 只负责调用该脚本(薄触发器,一行)
                       Claude Code: PostToolUse / Stop hook
-                      Codex: hook 能力未核实,退路是写进 AGENTS.md 工作流
+                      Codex: .codex/hooks.json(PostToolUse / Stop)
 第三层  最终兜底   →  pre-commit + CI 跑同一个脚本
 ```
 第三层是最强的一道,但**不是绝对保险**(原文写"不会漏"是过度承诺):
@@ -154,7 +154,7 @@
 > 事件名与 Claude Code 完全一致(`PreToolUse` / `PostToolUse` / `Stop` / `SubagentStart` /
 > `SubagentStop` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `PreCompact` /
 > `PostCompact` / `PermissionRequest`),契约也一致(`exit 2` + stderr、`decision: block` + reason)。
-> 配置文件是 `hooks.json`。**本仓库尚未提供 Codex 侧 `hooks.json`,这是现在真实存在的缺口。**
+> 配置文件是 `hooks.json`。本仓库已在 2026-08-04 补上项目级 `.codex/hooks.json`。
 > 另外 Codex 也有 subagent:`collaboration.spawn_agent`(需 `features.multi_agent = true`)。
 
 ---
@@ -535,13 +535,14 @@ ignore = ["SIM116"]           # 理由见上表
       ⚠️ **已删除**(2026-07-31 晚)。它分不清选项标签 / few-shot 示例 / 输出模板
       和真正的逐条堆砌 —— 这四者的区别是语义的。而且它本身就是「对自然语言做正则匹配
       猜意图」,正是第六节禁止的事。**禁令保留,检查删除**,归 diff review。见第十三节
-- [x] hook 接线 —— Claude Code PostToolUse(exit 2 反馈给模型)/ Stop(`decision: block`,
-      靠 `stop_hook_active` 保证只拦一次);pre-commit 不加 `--strict`,不阻断提交
+- [x] hook 接线 —— Claude Code / Codex PostToolUse(exit 2 反馈给模型)/ Stop
+      (`decision: block`,靠 `stop_hook_active` 保证只拦一次);pre-commit 不加 `--strict`,不阻断提交
 - [x] `selftest/` —— check.py 自己的回归测试:全部规则触发 + 邻近反例零误报
       (当时 8 条 / 7 个反例,现为 6 条)
 - [x] 核实 Codex CLI 当前 hook 能力 —— **2026-08-03 已核实:有,stable,事件名和契约与
       Claude Code 一致,配置文件 `hooks.json`**。Codex 同时有 subagent
-      (`collaboration.spawn_agent`)。**新缺口:本仓库还没提供 Codex 侧的 `hooks.json`。**
+      (`collaboration.spawn_agent`)。2026-08-04 已补项目级 `.codex/hooks.json`,并适配
+      `apply_patch` 通过 `tool_input.command` 传递补丁而不是 `file_path` 的载荷差异。
 
 **实现过程中被推翻/修正的**(细节写在 `ai-coding-rules/README.md`「已知的洞」):
 

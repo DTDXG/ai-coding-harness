@@ -86,8 +86,9 @@ cp AGENTS.md CLAUDE.md            <你的项目>/
 # 2. 检查脚本(单文件、零依赖、只用标准库)
 mkdir -p <你的项目>/scripts && cp scripts/check.py <你的项目>/scripts/
 
-# 3. Claude Code hook(可选,但这是「不依赖模型记得」的关键)
+# 3. 平台 hook(可选,但这是「不依赖模型记得」的关键)
 cp -r .claude/                    <你的项目>/
+cp -r .codex/                     <你的项目>/
 
 # 4. ruff 配置 —— 不要整份复制,把 pyproject.ruff.toml 的内容合并进已有的 pyproject.toml
 # 5. pre-commit(可选)
@@ -95,6 +96,9 @@ cp .pre-commit-config.yaml        <你的项目>/
 
 echo ".check-hits.log" >> <你的项目>/.gitignore
 ```
+
+Codex 首次加载项目 hook 时会要求审查。确认项目可信后,在 CLI 里运行 `/hooks`,
+检查命令内容并信任当前定义;hook 变化后需要重新审查。
 
 装完自测:
 
@@ -114,6 +118,7 @@ Codex **不认** `@` 导入语法。内容放 `AGENTS.md`(两边都读),`CLAUDE.
 | `scripts/check.py` | 6 条 AST 检查,全是警告 | 0 |
 | `pyproject.ruff.toml` | ruff 配置片段,替代手写风格指南 | 0 |
 | `.claude/settings.json` | PostToolUse + Stop hook | 0 |
+| `.codex/hooks.json` | Codex CLI 的 PostToolUse + Stop hook | 0 |
 | `.claude/skills/code-simplifier/` | 语义级审查,description 写成触发条件 | 0(只有一行 description) |
 | `.pre-commit-config.yaml` | 兜底 | 0 |
 | `selftest/` | check.py 自己的回归测试 | 0 |
@@ -287,16 +292,16 @@ if "ping" in text:   # check: ignore[keyword-match] 协议探活,不是猜用户
 
 3. **Stop hook 会拦一次。** 有警告或触发 code-simplifier 条件时返回 `decision: block`,
    模型多跑一轮来处理。靠 `stop_hook_active` 保证只拦一次,不会死循环。
-   嫌烦就设 `CHECK_STOP_BLOCK=0`,或删掉 `.claude/settings.json` 里的 Stop 段。
+   嫌烦就设 `CHECK_STOP_BLOCK=0`,或删掉对应平台配置里的 Stop 段。
 
 **Codex 的 hook 和 subagent 都已核实**(codex-cli 0.146.0,2026-08-03 实测):
 
 - **hooks —— stable 且默认启用**。事件名和 Claude Code 完全一致:`PreToolUse` / `PostToolUse` /
   `Stop` / `SubagentStart` / `SubagentStop` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` /
   `PreCompact` / `PostCompact` / `PermissionRequest`。契约也一致(`exit 2` + stderr 反馈、
-  `decision: block` + reason)。配置文件是 `hooks.json`,不是 `.claude/settings.json`。
-  **本仓库还没提供 Codex 侧的 `hooks.json`** —— 现在 Codex 那边靠 `AGENTS.md` 里那句
-  「改完跑 `python scripts/check.py --diff`」加 pre-commit 兜底。
+  `decision: block` + reason)。本仓库通过项目级 `.codex/hooks.json` 接线;首次加载或定义变化后,
+  需要在 `/hooks` 中审查并信任。Codex 的 `apply_patch` 载荷不提供 `file_path`,检查器会从
+  补丁协议的文件头提取本次实际改动的 Python 文件。
 - **subagent —— `collaboration.spawn_agent`**,配套 `wait_agent` / `list_agents` /
   `send_message` / `interrupt_agent`,需要 `features.multi_agent = true`。
 

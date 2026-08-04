@@ -742,8 +742,49 @@ def analyse(files: list[Path], root: Path, want_dup: bool, dup_limit: int = DUP_
     return unique, skipped_dup
 
 
+PATCH_PATH_PREFIXES = ("*** Add File: ", "*** Update File: ", "*** Move to: ")
+
+
+def hook_changed_paths(payload: dict, root: Path) -> list[Path]:
+    """Normalize Claude Code and Codex PostToolUse payloads into changed files."""
+    tool_input = payload.get("tool_input") or {}
+    raw_paths: list[str] = []
+
+    file_path = tool_input.get("file_path")
+    if isinstance(file_path, str) and file_path:
+        raw_paths.append(file_path)
+
+    command = tool_input.get("command")
+    if payload.get("tool_name") == "apply_patch" and isinstance(command, str):
+        for line in command.splitlines():
+            for prefix in PATCH_PATH_PREFIXES:
+                if line.startswith(prefix):
+                    raw_paths.append(line.removeprefix(prefix).strip())
+                    break
+
+    cwd = payload.get("cwd")
+    base = Path(cwd) if isinstance(cwd, str) and cwd else Path.cwd()
+    resolved_root = root.resolve()
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for raw in raw_paths:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = base / path
+        path = path.resolve()
+        try:
+            path.relative_to(resolved_root)
+        except ValueError:
+            continue
+        if path in seen or not path.is_file() or not selectable(path):
+            continue
+        seen.add(path)
+        paths.append(path)
+    return paths
+
+
 def hook_post_tool(root: Path) -> int:
-    """Claude Code PostToolUse:只查刚改的那个文件,有问题就让模型立刻看见。"""
+    """Check files changed by Claude Code or Codex and return model-visible warnings."""
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -751,14 +792,11 @@ def hook_post_tool(root: Path) -> int:
         print(f"[check.py] PostToolUse 输入解析失败:{exc}", file=sys.stderr)
         # check: ignore[fake-success] 返回值是 hook 退出码,不是业务结果;失败已经写进 stderr
         return 0
-    raw = (payload.get("tool_input") or {}).get("file_path")
-    if not raw:
-        return 0
-    path = Path(raw)
-    if not path.is_file() or not selectable(path):
+    paths = hook_changed_paths(payload, root)
+    if not paths:
         return 0
 
-    findings, _ = analyse([path], root, want_dup=False)
+    findings, _ = analyse(paths, root, want_dup=False)
     append_log(root, findings)
     live = [f for f in findings if not f.exempt]
     if not live:
@@ -768,7 +806,7 @@ def hook_post_tool(root: Path) -> int:
 
 
 def hook_stop(root: Path) -> int:
-    """Claude Code Stop:收尾时对着 diff 提醒一次。靠 stop_hook_active 保证只提醒一次。"""
+    """Check the final diff for Claude Code or Codex and warn at most once."""
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError) as exc:

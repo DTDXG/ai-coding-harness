@@ -9,12 +9,13 @@
 2. 下半部分的邻近反例**一条都不**触发 —— 这半边才是重点。
    一个只会报警的检查器没用,得先证明它不会到处误报,你才会一直开着它。
 
-外加豁免机制和 file-too-long 的两个小用例。
+外加豁免机制、file-too-long 和两种平台 Hook 载荷的回归用例。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,28 @@ def run_check(*args: str) -> dict:
     if proc.returncode not in (0, 1):
         raise SystemExit(f"check.py 崩了 (exit {proc.returncode}):\n{proc.stderr}")
     return json.loads(proc.stdout)
+
+
+def run_hook(cwd: Path, flag: str, payload: dict) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.pop("CHECK_STOP_BLOCK", None)
+    return subprocess.run(
+        [sys.executable, str(CHECK), flag],
+        cwd=cwd,
+        input=json.dumps(payload, ensure_ascii=False),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def write_hit(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        'def route(query: str) -> str:\n    if "申请退款" in query:\n        return "refund"\n    return "ok"\n',
+        encoding="utf-8",
+    )
 
 
 def negative_section_start() -> int:
@@ -119,11 +142,100 @@ def case_no_false_positive_on_self() -> None:
             failures.append(f"check.py 自己被报了:{f['line']} [{f['rule']}] {f['message']}")
 
 
+def case_post_tool_hooks() -> None:
+    """Claude file_path and Codex patch headers must reach the same checker."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        claude_file = root / "claude_case.py"
+        write_hit(claude_file)
+        claude = run_hook(root, "--hook-post-tool", {
+            "cwd": str(root),
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(claude_file)},
+        })
+        if claude.returncode != 2 or "[keyword-match]" not in claude.stderr:
+            failures.append("Claude PostToolUse:file_path 没有触发警告反馈")
+
+        update_file = root / "codex_case.py"
+        add_file = root / "nested" / "new case.py"
+        moved_file = root / "moved_case.py"
+        for path in (update_file, add_file, moved_file):
+            write_hit(path)
+        codex = run_hook(root, "--hook-post-tool", {
+            "cwd": str(root),
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": (
+                    "*** Begin Patch\n"
+                    "*** Update File: codex_case.py\n"
+                    "*** Add File: nested/new case.py\n"
+                    "*** Move to: moved_case.py\n"
+                    "*** End Patch\n"
+                ),
+            },
+        })
+        expected = ("codex_case.py", "nested/new case.py", "moved_case.py")
+        if codex.returncode != 2 or any(path not in codex.stderr for path in expected):
+            failures.append("Codex PostToolUse:单文件/多文件/新增或移动路径没有完整触发")
+
+        text_file = root / "notes.txt"
+        text_file.write_text("not python", encoding="utf-8")
+        negatives = [
+            {
+                "cwd": str(root),
+                "tool_name": "apply_patch",
+                "tool_input": {"command": "*** Update File: notes.txt"},
+            },
+            {
+                "cwd": str(root),
+                "tool_name": "apply_patch",
+                "tool_input": {"command": "*** Delete File: deleted.py"},
+            },
+            {
+                "cwd": str(root),
+                "tool_name": "Bash",
+                "tool_input": {"command": "*** Update File: codex_case.py"},
+            },
+        ]
+        for payload in negatives:
+            proc = run_hook(root, "--hook-post-tool", payload)
+            if proc.returncode != 0 or proc.stderr:
+                failures.append(f"PostToolUse 邻近反例被误触发:{payload['tool_name']}")
+
+
+def case_stop_hook() -> None:
+    """Stop continues once when warnings exist and never repeats that continuation."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "selftest@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "selftest"], cwd=root, check=True)
+        target = root / "app.py"
+        target.write_text('def route(query: str) -> str:\n    return "ok"\n', encoding="utf-8")
+        subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        write_hit(target)
+
+        first = run_hook(root, "--hook-stop", {"cwd": str(root), "stop_hook_active": False})
+        try:
+            output = json.loads(first.stdout)
+        except json.JSONDecodeError:
+            output = {}
+        if first.returncode != 0 or output.get("decision") != "block":
+            failures.append("Stop Hook:首次检查没有返回 decision=block")
+
+        repeated = run_hook(root, "--hook-stop", {"cwd": str(root), "stop_hook_active": True})
+        if repeated.returncode != 0 or repeated.stdout or repeated.stderr:
+            failures.append("Stop Hook:stop_hook_active=true 时仍然重复反馈")
+
+
 def main() -> int:
     case_sample()
     case_exemption()
     case_file_too_long()
     case_no_false_positive_on_self()
+    case_post_tool_hooks()
+    case_stop_hook()
 
     if failures:
         print("FAIL")
