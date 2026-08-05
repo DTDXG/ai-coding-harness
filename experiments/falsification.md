@@ -98,7 +98,7 @@ NEGATIVES = ["...", "...", "..."]      # 期望:保持修复前的行为
 | 层 | 命令 | 结果 |
 |---|---|---|
 | ruff | `ruff check .` | |
-| check.py | `python scripts/check.py --diff` | |
+| check.py | `python3 scripts/check.py --diff` | |
 | code-simplifier | 手动触发 skill | |
 | **行为验证** | **跑你第 2 步造的 cases** | |
 

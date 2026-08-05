@@ -67,7 +67,7 @@ F9 是**元失败模式**:它让其他八条的自查全部失效,所以它的�
 | **F3** 只加不删 | 确认无调用方就直接删,不留 shim;不接受「保留旧的以防万一」 | `version-suffix`、`file-too-long` | — |
 | **F4** 重复造轮子 | 新写函数前说明现有相近实现为何不可复用 | `dup-func` | — |
 | **F5** 卡住瞎试 | 连续 3 次修复失败就停,报告卡点 | — | — |
-| **F6** 伪造验证 | 没实际执行过命令不许说「已验证」;汇报必须带范围;改测试断言须有独立证据 | — | Stop hook 会拦一次,逼它处理未验证项 |
+| **F6** 伪造验证 | 没实际执行过命令不许说「已验证」;汇报必须带范围;改测试断言须有独立证据 | — | 无自动门禁;Stop 只能检查可机械识别的 diff 症状 |
 | **F7** API 幻觉 | 用第三方 API 前先确认**已安装版本**的实际签名 | — | — |
 | **F8** 范围扩张 | 不实现我没要求的功能;做了没要求的事必须说 | — | diff review |
 | **F9** 陷在自己上下文 | **验证者不该是开发者本人**;只给审查者「原始需求 + git diff」 | — | 干净上下文的 subagent。Claude Code 用 Task,Codex 用 `collaboration.spawn_agent` |
@@ -103,7 +103,7 @@ Codex 首次加载项目 hook 时会要求审查。确认项目可信后,在 CLI
 装完自测:
 
 ```bash
-python selftest/run.py
+python3 selftest/run.py
 # OK — 6 条规则全部触发,邻近反例零误报,豁免机制正常
 ```
 
@@ -130,11 +130,11 @@ Codex **不认** `@` 导入语法。内容放 `AGENTS.md`(两边都读),`CLAUDE.
 ## 五、跑法
 
 ```bash
-python scripts/check.py                # 查 git 改动过的文件(默认)
-python scripts/check.py --all          # 全仓库
-python scripts/check.py --advise       # 附带「要不要跑 code-simplifier」的判断
-python scripts/check.py --report       # 月度复盘:哪条规则该删、哪条该收窄
-python scripts/check.py --strict       # 有未豁免命中就 exit 1(CI 用,默认关)
+python3 scripts/check.py                # 查 git 改动过的文件(默认)
+python3 scripts/check.py --all          # 全仓库
+python3 scripts/check.py --advise       # 附带「要不要跑 code-simplifier」的判断
+python3 scripts/check.py --report       # 月度复盘:哪条规则该删、哪条该收窄
+python3 scripts/check.py --strict       # 有未豁免命中就 exit 1(CI 用,默认关)
 ```
 
 误报了就在那行加豁免,**理由是必须写的**:
@@ -191,7 +191,7 @@ if "ping" in text:   # check: ignore[keyword-match] 协议探活,不是猜用户
 
 5. **在真实仓库上量误报率。**
    ```bash
-   python scripts/check.py --all --no-log   # 在你自己的项目上跑
+   python3 scripts/check.py --all --no-log   # 在你自己的项目上跑
    ```
    **只在自己写的样本上测 = 循环论证** —— 样本是为了让它命中才写的。
    误报率超过三成就别上,它会教会你忽略整个工具。
@@ -290,16 +290,18 @@ if "ping" in text:   # check: ignore[keyword-match] 协议探活,不是猜用户
 2. **代码注释和 commit message 的语言** —— `AGENTS.md` 里现在写的是
    「代码注释、commit message 用英文,文档和对话用中文」。
 
-3. **Stop hook 会拦一次。** 有警告或触发 code-simplifier 条件时返回 `decision: block`,
-   模型多跑一轮来处理。靠 `stop_hook_active` 保证只拦一次,不会死循环。
-   嫌烦就设 `CHECK_STOP_BLOCK=0`,或删掉对应平台配置里的 Stop 段。
+3. **Stop hook 是重复提醒,不是平台级硬门禁。** 有警告或触发 code-simplifier 条件时返回
+   `decision: block`,让模型继续处理;只要未豁免命中仍存在,后续 Stop 会再次返回 block。
+   误报必须加带理由的豁免,否则可能持续循环;纯 code-simplifier 建议仍只提醒一次。
+   要关闭就设 `CHECK_STOP_BLOCK=0`,或删掉对应平台配置里的 Stop 段。
 
 **Codex 的 hook 和 subagent 都已核实**(codex-cli 0.146.0,2026-08-03 实测):
 
 - **hooks —— stable 且默认启用**。事件名和 Claude Code 完全一致:`PreToolUse` / `PostToolUse` /
   `Stop` / `SubagentStart` / `SubagentStop` / `SessionStart` / `SessionEnd` / `UserPromptSubmit` /
   `PreCompact` / `PostCompact` / `PermissionRequest`。契约也一致(`exit 2` + stderr 反馈、
-  `decision: block` + reason)。本仓库通过项目级 `.codex/hooks.json` 接线;首次加载或定义变化后,
+  `decision: block` + reason)。其中 Stop 的 block 表示继续处理,不等于拒绝结束的硬门禁。
+  本仓库通过项目级 `.codex/hooks.json` 接线;首次加载或定义变化后,
   需要在 `/hooks` 中审查并信任。Codex 的 `apply_patch` 载荷不提供 `file_path`,检查器会从
   补丁协议的文件头提取本次实际改动的 Python 文件。
 - **subagent —— `collaboration.spawn_agent`**,配套 `wait_agent` / `list_agents` /

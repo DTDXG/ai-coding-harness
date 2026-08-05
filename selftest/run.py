@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check.py 的回归自测。改完 check.py 就跑一遍::
 
-    python selftest/run.py
+    python3 selftest/run.py
 
 它检查两件事:
 
@@ -143,7 +143,7 @@ def case_no_false_positive_on_self() -> None:
 
 
 def case_post_tool_hooks() -> None:
-    """Claude file_path and Codex patch headers must reach the same checker."""
+    """Supported hook payload variants must reach the same checker."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         claude_file = root / "claude_case.py"
@@ -178,6 +178,14 @@ def case_post_tool_hooks() -> None:
         if codex.returncode != 2 or any(path not in codex.stderr for path in expected):
             failures.append("Codex PostToolUse:单文件/多文件/新增或移动路径没有完整触发")
 
+        direct = run_hook(root, "--hook-post-tool", {
+            "cwd": str(root),
+            "tool_name": "apply_patch",
+            "tool_input": "*** Update File: codex_case.py",
+        })
+        if direct.returncode != 2 or "codex_case.py" not in direct.stderr:
+            failures.append("Codex PostToolUse:字符串型 tool_input 没有触发")
+
         text_file = root / "notes.txt"
         text_file.write_text("not python", encoding="utf-8")
         negatives = [
@@ -202,9 +210,26 @@ def case_post_tool_hooks() -> None:
             if proc.returncode != 0 or proc.stderr:
                 failures.append(f"PostToolUse 邻近反例被误触发:{payload['tool_name']}")
 
+        invalid_inputs = (
+            "not json",
+            json.dumps({"tool_input": []}),
+            json.dumps({"tool_name": "apply_patch", "tool_input": {}}),
+        )
+        for hook_input in invalid_inputs:
+            proc = subprocess.run(
+                [sys.executable, str(CHECK), "--hook-post-tool"],
+                cwd=root,
+                input=hook_input,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode != 2 or "解析失败" not in proc.stderr:
+                failures.append("PostToolUse:无效输入没有显式失败")
+
 
 def case_stop_hook() -> None:
-    """Stop continues once when warnings exist and never repeats that continuation."""
+    """Stop keeps continuing while warnings remain and releases after cleanup."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
@@ -225,8 +250,62 @@ def case_stop_hook() -> None:
             failures.append("Stop Hook:首次检查没有返回 decision=block")
 
         repeated = run_hook(root, "--hook-stop", {"cwd": str(root), "stop_hook_active": True})
-        if repeated.returncode != 0 or repeated.stdout or repeated.stderr:
-            failures.append("Stop Hook:stop_hook_active=true 时仍然重复反馈")
+        try:
+            repeated_output = json.loads(repeated.stdout)
+        except json.JSONDecodeError:
+            repeated_output = {}
+        if repeated.returncode != 0 or repeated_output.get("decision") != "block":
+            failures.append("Stop Hook:问题仍存在时因 stop_hook_active=true 错误放行")
+
+        target.write_text('def route(query: str) -> str:\n    return "ok"\n', encoding="utf-8")
+        resolved = run_hook(root, "--hook-stop", {"cwd": str(root), "stop_hook_active": True})
+        if resolved.returncode != 0 or resolved.stdout or resolved.stderr:
+            failures.append("Stop Hook:问题修复后没有放行")
+
+        malformed = subprocess.run(
+            [sys.executable, str(CHECK), "--hook-stop"],
+            cwd=root,
+            input="not json",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        try:
+            malformed_output = json.loads(malformed.stdout)
+        except json.JSONDecodeError:
+            malformed_output = {}
+        if malformed.returncode != 0 or malformed_output.get("decision") != "block":
+            failures.append("Stop Hook:无效输入没有显式继续处理")
+
+        disabled_env = os.environ.copy()
+        disabled_env["CHECK_STOP_BLOCK"] = "0"
+        disabled = subprocess.run(
+            [sys.executable, str(CHECK), "--hook-stop"],
+            cwd=root,
+            input="not json",
+            capture_output=True,
+            text=True,
+            check=False,
+            env=disabled_env,
+        )
+        if disabled.returncode != 0 or disabled.stdout or disabled.stderr:
+            failures.append("Stop Hook:CHECK_STOP_BLOCK=0 没有完全关闭检查")
+
+        advice_target = root / "auth.py"
+        advice_target.write_text("VALUE = 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "auth.py"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "add advice target"], cwd=root, check=True)
+        advice_target.write_text("VALUE = 2\n", encoding="utf-8")
+        advice_first = run_hook(root, "--hook-stop", {"cwd": str(root), "stop_hook_active": False})
+        advice_repeated = run_hook(root, "--hook-stop", {"cwd": str(root), "stop_hook_active": True})
+        try:
+            advice_output = json.loads(advice_first.stdout)
+        except json.JSONDecodeError:
+            advice_output = {}
+        if advice_output.get("decision") != "block":
+            failures.append("Stop Hook:纯建议首次没有反馈")
+        if advice_repeated.returncode != 0 or advice_repeated.stdout or advice_repeated.stderr:
+            failures.append("Stop Hook:纯建议在 stop_hook_active=true 时造成无法解除的循环")
 
 
 def main() -> int:

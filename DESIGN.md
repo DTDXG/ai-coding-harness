@@ -536,7 +536,8 @@ ignore = ["SIM116"]           # 理由见上表
       和真正的逐条堆砌 —— 这四者的区别是语义的。而且它本身就是「对自然语言做正则匹配
       猜意图」,正是第六节禁止的事。**禁令保留,检查删除**,归 diff review。见第十三节
 - [x] hook 接线 —— Claude Code / Codex PostToolUse(exit 2 反馈给模型)/ Stop
-      (`decision: block`,靠 `stop_hook_active` 保证只拦一次);pre-commit 不加 `--strict`,不阻断提交
+      (`decision: block` 让模型继续处理;未豁免命中仍存在就重复提醒,纯 code-simplifier 建议只提醒一次,
+      不是平台级硬门禁);pre-commit 不加 `--strict`,不阻断提交
 - [x] `selftest/` —— check.py 自己的回归测试:全部规则触发 + 邻近反例零误报
       (当时 8 条 / 7 个反例,现为 6 条)
 - [x] 核实 Codex CLI 当前 hook 能力 —— **2026-08-03 已核实:有,stable,事件名和契约与

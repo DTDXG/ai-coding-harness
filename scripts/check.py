@@ -12,13 +12,13 @@
 
 用法::
 
-    python scripts/check.py                 # 检查 git 里改动过的 Python 文件
-    python scripts/check.py path/to/f.py    # 检查指定文件/目录
-    python scripts/check.py --all           # 检查全仓库
-    python scripts/check.py --advise        # 额外判断要不要跑 code-simplifier
-    python scripts/check.py --report        # 汇总 .check-hits.log,做月度规则复盘
-    python scripts/check.py --json          # 机器可读输出
-    python scripts/check.py --strict        # 有未豁免命中时 exit 1(CI 用,默认关)
+    python3 scripts/check.py                 # 检查 git 里改动过的 Python 文件
+    python3 scripts/check.py path/to/f.py    # 检查指定文件/目录
+    python3 scripts/check.py --all           # 检查全仓库
+    python3 scripts/check.py --advise        # 额外判断要不要跑 code-simplifier
+    python3 scripts/check.py --report        # 汇总 .check-hits.log,做月度规则复盘
+    python3 scripts/check.py --json          # 机器可读输出
+    python3 scripts/check.py --strict        # 有未豁免命中时 exit 1(CI 用,默认关)
 
 豁免写法(写在命中行,或它上面一行)::
 
@@ -586,7 +586,7 @@ def render(findings: list[Finding], advice: list[str], skipped_dup: bool) -> str
         tally = "  ".join(f"{r}×{n}" for r, n in counts.most_common())
         lines.append(f"\n{len(live)} 处警告(另有 {len(exempt)} 处已豁免):{tally}")
         lines.append(
-            "全部是警告,不阻止任何操作,允许误报。确认是误报就在那行加:\n"
+            "规则允许误报,但未豁免命中不得结束。确认是误报就在那行加:\n"
             "  # check: ignore[规则名] 为什么是误报\n"
             "不要为了让它闭嘴而改代码结构。"
         )
@@ -747,15 +747,27 @@ PATCH_PATH_PREFIXES = ("*** Add File: ", "*** Update File: ", "*** Move to: ")
 
 def hook_changed_paths(payload: dict, root: Path) -> list[Path]:
     """Normalize Claude Code and Codex PostToolUse payloads into changed files."""
-    tool_input = payload.get("tool_input") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("hook payload must be a JSON object")
+
+    tool_input = payload.get("tool_input")
+    if tool_input is None:
+        tool_input = {}
     raw_paths: list[str] = []
 
-    file_path = tool_input.get("file_path")
-    if isinstance(file_path, str) and file_path:
-        raw_paths.append(file_path)
+    if isinstance(tool_input, dict):
+        file_path = tool_input.get("file_path")
+        if isinstance(file_path, str) and file_path:
+            raw_paths.append(file_path)
+        command = tool_input.get("command")
+    elif isinstance(tool_input, str):
+        command = tool_input
+    else:
+        raise ValueError("tool_input must be a JSON object or string")
 
-    command = tool_input.get("command")
-    if payload.get("tool_name") == "apply_patch" and isinstance(command, str):
+    if payload.get("tool_name") == "apply_patch":
+        if not isinstance(command, str):
+            raise ValueError("apply_patch tool_input is missing a string command")
         for line in command.splitlines():
             for prefix in PATCH_PATH_PREFIXES:
                 if line.startswith(prefix):
@@ -788,11 +800,13 @@ def hook_post_tool(root: Path) -> int:
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError) as exc:
-        # 不能让 hook 崩掉会话,但也不能装作没事 —— 写到 stderr,在 hook 日志里看得见
         print(f"[check.py] PostToolUse 输入解析失败:{exc}", file=sys.stderr)
-        # check: ignore[fake-success] 返回值是 hook 退出码,不是业务结果;失败已经写进 stderr
-        return 0
-    paths = hook_changed_paths(payload, root)
+        return 2
+    try:
+        paths = hook_changed_paths(payload, root)
+    except ValueError as exc:
+        print(f"[check.py] PostToolUse 参数解析失败:{exc}", file=sys.stderr)
+        return 2
     if not paths:
         return 0
 
@@ -806,17 +820,20 @@ def hook_post_tool(root: Path) -> int:
 
 
 def hook_stop(root: Path) -> int:
-    """Check the final diff for Claude Code or Codex and warn at most once."""
-    try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError) as exc:
-        print(f"[check.py] Stop 输入解析失败:{exc}", file=sys.stderr)
-        payload = {}
-    if payload.get("stop_hook_active"):
-        return 0
+    """Check the final diff and continue until live findings are resolved."""
     if os.environ.get("CHECK_STOP_BLOCK") == "0":
         return 0
-
+    try:
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("hook payload must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as exc:
+        json.dump(
+            {"decision": "block", "reason": f"[check.py] Stop 输入解析失败:{exc}"},
+            sys.stdout,
+            ensure_ascii=False,
+        )
+        return 0  # check: ignore[fake-success] decision=block exposes the hook failure to Codex.
     files = [p for p in changed_files(root) if selectable(p)]
     if not files:
         return 0
@@ -825,6 +842,8 @@ def hook_stop(root: Path) -> int:
     advice = build_advice(root)
     live = [f for f in findings if not f.exempt]
     if not live and not advice:
+        return 0
+    if payload.get("stop_hook_active") and not live:
         return 0
 
     text = render(findings, advice, skipped)

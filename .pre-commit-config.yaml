@@ -12,11 +12,11 @@ repos:
     hooks:
       - id: ai-antipattern-check
         name: AI 反模式检查(仅警告)
-        entry: python scripts/check.py
+        entry: python3 scripts/check.py
         language: system
         types: [python]
         pass_filenames: true
         verbose: true # 让警告在 commit 时可见
         # 注意:不加 --strict,所以它永远不会阻止提交。
         # 想让它真的卡住提交(不推荐,误报会变成日常摩擦),把 entry 改成:
-        #   python scripts/check.py --strict
+        #   python3 scripts/check.py --strict
